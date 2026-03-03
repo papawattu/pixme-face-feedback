@@ -61,18 +61,21 @@ type FindResponse struct {
 
 // DeepFaceConfig holds configurable parameters for DeepFace requests.
 type DeepFaceConfig struct {
-	ModelName       string
-	DetectorBackend string
-	DistanceMetric  string
-	FacesDir        string // path to the reference faces directory (e.g. /mnt/faces)
+	ModelName        string
+	DetectorBackend  string
+	DistanceMetric   string
+	FacesDir         string // path to the reference faces directory as seen by THIS service (e.g. /data/faces)
+	DeepFaceFacesDir string // path to the reference faces directory as seen by DEEPFACE (e.g. /mnt/faces)
 }
 
 // detectFaces calls DeepFace POST /represent to detect faces in the given
-// image URL and returns their bounding boxes.
+// image URL and returns their bounding boxes. Uses enforce_detection=true
+// so that images without real faces return an empty list instead of a
+// dummy bounding box covering the entire image.
 func detectFaces(ctx context.Context, client *http.Client, deepfaceURL, imageURL string, cfg DeepFaceConfig) ([]FacialArea, error) {
 	payload := RepresentRequest{
 		Img:              imageURL,
-		EnforceDetection: false,
+		EnforceDetection: true,
 		DetectorBackend:  cfg.DetectorBackend,
 	}
 	body, err := json.Marshal(payload)
@@ -91,6 +94,15 @@ func detectFaces(ctx context.Context, client *http.Client, deepfaceURL, imageURL
 		return nil, fmt.Errorf("calling DeepFace /represent: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// 400 with enforce_detection=true means no face was found — return empty.
+	if resp.StatusCode == http.StatusBadRequest {
+		respBody, _ := io.ReadAll(resp.Body)
+		slog.Info("DeepFace /represent: no face detected (enforce_detection=true)",
+			slog.String("body", string(respBody)),
+		)
+		return nil, nil
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -118,13 +130,14 @@ func detectFaces(ctx context.Context, client *http.Client, deepfaceURL, imageURL
 // of the matched face, or nil if no match was found.
 func findPersonFace(ctx context.Context, client *http.Client, deepfaceURL, imageURL, personName string, cfg DeepFaceConfig) (*FacialArea, error) {
 	// Use the person-specific subdirectory as db_path so /find only matches
-	// against that person's reference faces.
-	personDbPath := cfg.FacesDir + "/" + personName
+	// against that person's reference faces. Use the DeepFace-visible path
+	// (e.g. /mnt/faces) since this path is resolved on the DeepFace server.
+	personDbPath := cfg.DeepFaceFacesDir + "/" + personName
 
 	payload := FindRequest{
 		Img:              imageURL,
 		DbPath:           personDbPath,
-		EnforceDetection: false,
+		EnforceDetection: true,
 		ModelName:        cfg.ModelName,
 		DetectorBackend:  cfg.DetectorBackend,
 		DistanceMetric:   cfg.DistanceMetric,
@@ -148,6 +161,14 @@ func findPersonFace(ctx context.Context, client *http.Client, deepfaceURL, image
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		// 400 with enforce_detection=true means no face was found in the image.
+		if resp.StatusCode == http.StatusBadRequest {
+			slog.Info("DeepFace /find: no face detected (enforce_detection=true)",
+				slog.String("person_name", personName),
+				slog.String("body", string(respBody)),
+			)
+			return nil, nil
+		}
 		return nil, fmt.Errorf("DeepFace /find: %s — %s", resp.Status, string(respBody))
 	}
 

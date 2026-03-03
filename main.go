@@ -74,10 +74,11 @@ func main() {
 
 	// DeepFace model/detector configuration.
 	deepfaceCfg := DeepFaceConfig{
-		ModelName:       getEnvWithDefault("DEEPFACE_MODEL", "ArcFace"),
-		DetectorBackend: getEnvWithDefault("DEEPFACE_DETECTOR", "retinaface"),
-		DistanceMetric:  getEnvWithDefault("DEEPFACE_DISTANCE_METRIC", "cosine"),
-		FacesDir:        facesDir,
+		ModelName:        getEnvWithDefault("DEEPFACE_MODEL", "ArcFace"),
+		DetectorBackend:  getEnvWithDefault("DEEPFACE_DETECTOR", "retinaface"),
+		DistanceMetric:   getEnvWithDefault("DEEPFACE_DISTANCE_METRIC", "cosine"),
+		FacesDir:         facesDir,
+		DeepFaceFacesDir: getEnvWithDefault("DEEPFACE_FACES_DIR", "/mnt/faces"),
 	}
 
 	slog.Info("Configuration loaded",
@@ -86,6 +87,7 @@ func main() {
 		slog.String("image_base_url", imageBaseURL),
 		slog.String("deepface_url", deepfaceURL),
 		slog.String("faces_dir", facesDir),
+		slog.String("deepface_faces_dir", deepfaceCfg.DeepFaceFacesDir),
 		slog.String("deepface_model", deepfaceCfg.ModelName),
 		slog.String("deepface_detector", deepfaceCfg.DetectorBackend),
 		slog.String("deepface_distance_metric", deepfaceCfg.DistanceMetric),
