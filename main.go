@@ -72,18 +72,26 @@ func main() {
 	facesDir := getEnvWithDefault("FACES_DIR", "/data/faces")
 	internalAPIKey := getEnvWithDefault("INTERNAL_API_KEY", "")
 
+	// DeepFace model/detector configuration.
+	deepfaceCfg := DeepFaceConfig{
+		ModelName:       getEnvWithDefault("DEEPFACE_MODEL", "ArcFace"),
+		DetectorBackend: getEnvWithDefault("DEEPFACE_DETECTOR", "retinaface"),
+		DistanceMetric:  getEnvWithDefault("DEEPFACE_DISTANCE_METRIC", "cosine"),
+		FacesDir:        facesDir,
+	}
+
 	slog.Info("Configuration loaded",
 		slog.String("nats_url", natsURL),
 		slog.String("pixme_api_url", pixmeAPIURL),
 		slog.String("image_base_url", imageBaseURL),
 		slog.String("deepface_url", deepfaceURL),
 		slog.String("faces_dir", facesDir),
+		slog.String("deepface_model", deepfaceCfg.ModelName),
+		slog.String("deepface_detector", deepfaceCfg.DetectorBackend),
+		slog.String("deepface_distance_metric", deepfaceCfg.DistanceMetric),
 	)
 
-	// Create the feedback handler.
-	handler := NewFeedbackHandler(pixmeAPIURL, imageBaseURL, deepfaceURL, facesDir, internalAPIKey)
-
-	// Connect to NATS.
+	// Connect to NATS (needed by handler for publishing events).
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", slog.Any("error", err))
@@ -91,6 +99,9 @@ func main() {
 	}
 	defer nc.Close()
 	slog.Info("Connected to NATS", slog.String("url", natsURL))
+
+	// Create the feedback handler.
+	handler := NewFeedbackHandler(pixmeAPIURL, imageBaseURL, deepfaceURL, facesDir, internalAPIKey, deepfaceCfg, nc)
 
 	propagator := otel.GetTextMapPropagator()
 	tracer := otel.Tracer("pixme-face-feedback")
