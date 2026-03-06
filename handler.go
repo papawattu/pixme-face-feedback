@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -20,6 +22,8 @@ import (
 )
 
 var handlerTracer = otel.Tracer("pixme-face-feedback/handler")
+
+const maxDownloadedImageBytes = 20 << 20
 
 // FeedbackHandler processes person add/remove events by cropping faces
 // from images and saving/removing them from the shared face database.
@@ -152,8 +156,22 @@ func (h *FeedbackHandler) HandlePersonAdded(ctx context.Context, event PersonEve
 	cropped := cropFace(fullImage, *face, 0.2)
 
 	// 6. Save to faces directory.
-	outputDir := filepath.Join(h.facesDir, event.PersonName)
-	outputFile := filepath.Join(outputDir, event.ImageID+extensionForFormat(format))
+	outputDir, err := safeFaceDir(h.facesDir, event.PersonName)
+	if err != nil {
+		slog.Error("Invalid person name for face directory",
+			slog.String("person_name", event.PersonName),
+			slog.Any("error", err),
+		)
+		return
+	}
+	outputFile, err := safeFaceFile(outputDir, event.ImageID+extensionForFormat(format))
+	if err != nil {
+		slog.Error("Invalid image ID for face file",
+			slog.String("image_id", event.ImageID),
+			slog.Any("error", err),
+		)
+		return
+	}
 
 	if err := saveCroppedFace(cropped, outputFile, format); err != nil {
 		slog.Error("Failed to save cropped face",
@@ -233,7 +251,10 @@ func (h *FeedbackHandler) locateFace(ctx context.Context, imageURL string, event
 // hasReferenceFaces checks if the person has any existing reference face
 // images in the faces directory.
 func (h *FeedbackHandler) hasReferenceFaces(personName string) bool {
-	personDir := filepath.Join(h.facesDir, personName)
+	personDir, err := safeFaceDir(h.facesDir, personName)
+	if err != nil {
+		return false
+	}
 	entries, err := os.ReadDir(personDir)
 	if err != nil {
 		return false // directory doesn't exist or can't be read
@@ -295,13 +316,27 @@ func (h *FeedbackHandler) HandlePersonRemoved(ctx context.Context, event PersonE
 		attribute.String("person_name", event.PersonName),
 	)
 
-	personDir := filepath.Join(h.facesDir, event.PersonName)
+	personDir, err := safeFaceDir(h.facesDir, event.PersonName)
+	if err != nil {
+		slog.Error("Invalid person name for face directory",
+			slog.String("person_name", event.PersonName),
+			slog.Any("error", err),
+		)
+		return
+	}
 
 	// Try common extensions.
 	extensions := []string{".jpg", ".jpeg", ".png"}
 	removed := false
 	for _, ext := range extensions {
-		filePath := filepath.Join(personDir, event.ImageID+ext)
+		filePath, err := safeFaceFile(personDir, event.ImageID+ext)
+		if err != nil {
+			slog.Error("Invalid image ID for face file",
+				slog.String("image_id", event.ImageID),
+				slog.Any("error", err),
+			)
+			return
+		}
 		if err := os.Remove(filePath); err == nil {
 			slog.Info("Removed reference face",
 				slog.String("person_name", event.PersonName),
@@ -394,9 +429,55 @@ func (h *FeedbackHandler) downloadImage(ctx context.Context, imageURL string) (i
 		return nil, "", fmt.Errorf("downloading image: %s", resp.Status)
 	}
 
-	img, format, err := image.Decode(resp.Body)
+	if resp.ContentLength > maxDownloadedImageBytes {
+		return nil, "", fmt.Errorf("image too large: %d bytes", resp.ContentLength)
+	}
+
+	limited := io.LimitReader(resp.Body, maxDownloadedImageBytes+1)
+	img, format, err := image.Decode(limited)
 	if err != nil {
 		return nil, "", fmt.Errorf("decoding image: %w", err)
 	}
 	return img, format, nil
+}
+
+func safeFaceDir(baseDir, personName string) (string, error) {
+	if personName == "" {
+		return "", errors.New("empty person name")
+	}
+	if filepath.IsAbs(personName) {
+		return "", errors.New("absolute paths are not allowed")
+	}
+	cleanName := filepath.Clean(personName)
+	if cleanName == "." || cleanName == ".." || cleanName != personName {
+		return "", fmt.Errorf("invalid person name %q", personName)
+	}
+	return safeJoin(baseDir, cleanName)
+}
+
+func safeFaceFile(dir, fileName string) (string, error) {
+	if fileName == "" {
+		return "", errors.New("empty file name")
+	}
+	if filepath.IsAbs(fileName) {
+		return "", errors.New("absolute file paths are not allowed")
+	}
+	cleanName := filepath.Clean(fileName)
+	if cleanName == "." || cleanName == ".." || cleanName != fileName || filepath.Base(cleanName) != cleanName {
+		return "", fmt.Errorf("invalid file name %q", fileName)
+	}
+	return safeJoin(dir, cleanName)
+}
+
+func safeJoin(baseDir, name string) (string, error) {
+	baseClean := filepath.Clean(baseDir)
+	joined := filepath.Join(baseClean, name)
+	rel, err := filepath.Rel(baseClean, joined)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes base dir: %q", name)
+	}
+	return joined, nil
 }
