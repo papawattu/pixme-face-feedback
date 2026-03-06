@@ -1,0 +1,64 @@
+openapi: 3.1.0
+info:
+  title: PixMe Face Feedback API
+  description: >
+    Real-time face feedback loop service for the PixMe platform. Primarily a
+    NATS event consumer that listens for person-tagging events, crops reference
+    face images from photos, and saves them for future recognition. The HTTP
+    endpoints exist solely for infrastructure health checks on port 8080.
+  version: 1.0.0
+  license:
+    name: MIT
+  contact:
+    name: PixMe
+    url: https://pixme.wattu.com
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security: []
+
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: >
+        Returns 200 with "ok" if the NATS connection is alive,
+        or 503 with "NATS disconnected" if not.
+      tags: [Infrastructure]
+      security: []
+      responses:
+        "200":
+          description: Service is healthy and NATS is connected
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+        "503":
+          description: NATS is disconnected
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: NATS disconnected
+
+  /version:
+    get:
+      operationId: getVersion
+      summary: Get build version
+      tags: [Infrastructure]
+      security: []
+      responses:
+        "200":
+          description: Build version
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    example: "v1.0.0"
