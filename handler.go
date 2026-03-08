@@ -405,11 +405,7 @@ func (h *FeedbackHandler) fetchImageMetadata(ctx context.Context, imageID string
 
 // buildImageURL constructs the full URL for downloading an image.
 func (h *FeedbackHandler) buildImageURL(uri string) (string, error) {
-	decoded, err := url.PathUnescape(uri)
-	if err != nil {
-		return "", fmt.Errorf("decoding URI %q: %w", uri, err)
-	}
-	return h.imageBaseURL + decoded, nil
+	return h.imageBaseURL + uri, nil
 }
 
 // downloadImage fetches and decodes an image from the given URL.
